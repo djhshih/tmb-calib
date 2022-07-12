@@ -14,6 +14,10 @@ names(mut.types) <- mut.types;
 counts.fields <- mut.types;
 opps.fields <- c("a", "c", "g", "t");
 
+smooth_scatter <- function(x, y, ...) {
+	smoothScatter(x, y, transformation = function(x) x^0.15, ...)
+}
+
 counts.exome0 <- read.table("data/mut_count/Exome_nonsilent_mut.txt", sep="\t", row.names=1, header=FALSE);
 colnames(counts.exome0) <- counts.fields;
 
@@ -63,15 +67,36 @@ tmb.panels <- mapply(
 
 par(mfrow=c(3, 2));
 for (panel in panels) {
-	plot(tmb.exome, tmb.panels[[panel]], main=panel);
+	plot(tmb.exome*1e6, tmb.panels[[panel]]*1e6, main=panel, log="xy");
 	abline(a=0, b=1, col="red")
 }
 
-par(mfrow=c(3, 2));
-for (panel in panels) {
-	plot(tmb.exome, tmb.panels[[panel]], main=panel, log="xy");
-	abline(a=0, b=1, col="red")
-}
+qdraw(
+	{
+		par(mfrow=c(3, 2));
+		for (panel in panels) {
+			smooth_scatter(tmb.exome*1e6, tmb.panels[[panel]]*1e6, main=panel);
+			abline(a=0, b=1, col="red")
+		}
+	},
+	width = 6,
+	height = 9,
+	file = "tmb-calib_tmb-exome-vs-panel.pdf"
+);
+
+qdraw(
+	{
+		par(mfrow=c(3, 2));
+		for (panel in panels) {
+			smooth_scatter(tmb.exome*1e6, tmb.panels[[panel]]*1e6, main=panel,
+				xlim=c(0, 100), ylim=c(0, 100));
+			abline(a=0, b=1, col="red")
+		}
+	},
+	width = 6,
+	height = 9,
+	file = "tmb-calib_tmb-exome-vs-panel_zoom.pdf"
+);
 
 rmse <- function(x, y) {
 	sqrt(mean((x - y)^2))
@@ -103,10 +128,6 @@ for (panel in panels) {
 	plot(tmb.exome, fitted(fits.linear[[panel]]), main=panel, xlim=c(0, 100/1e6), ylim=c(0, 100/1e6))
 	points(tmb.exome, fitted(fits.poisson[[panel]]) / tm.exposure, col="blue")
 	abline(a=0, b=1, col="red")
-}
-
-smooth_scatter <- function(x, y, ...) {
-	smoothScatter(x, y, transformation = function(x) x^0.15, ...)
 }
 
 par(mfrow=c(3, 2));
@@ -293,11 +314,49 @@ abline(a=0, b=1, col="red")
 
 # ---
 
-unlist(lapply(fits.linear, function(fit) cor(tmb.exome, fitted(fit))));
-unlist(lapply(fits.poisson, function(fit) cor(tmb.exome, fitted(fit)/tm.exposure)));
-unlist(lapply(fits.poisson.mut, function(fit) cor(tmb.exome, fitted.pm(fit)/tm.exposure)));
-unlist(lapply(fits.poisson.mut.l2, function(fit) cor(tmb.exome, fitted(fit)/tm.exposure)));
-cor(tmc.exome.rep, fitted.pm(fits.poisson.mut.cpanel))
+cd.linear <- unlist(lapply(fits.linear, function(fit) cor(tmb.exome, fitted(fit))^2));
+cd.poisson <- unlist(lapply(fits.poisson, function(fit) cor(tmb.exome, fitted(fit)/tm.exposure)^2));
+cd.poisson.mut <- unlist(lapply(fits.poisson.mut, function(fit) cor(tmb.exome, fitted.pm(fit)/tm.exposure)^2));
+cd.poisson.mut.l2 <- unlist(lapply(fits.poisson.mut.l2, function(fit) cor(tmb.exome, fitted(fit)/tm.exposure)^2));
+cd.poisson.mut.panelc <- cor(tmc.exome.rep, fitted.pm(fits.poisson.mut.cpanel))^2;
+
+d <- rbind(
+	data.frame(
+		method = "linear",
+		cd = cd.linear,
+		panel = panels
+	),
+	data.frame(
+		method = "poisson",
+		cd = cd.poisson,
+		panel = panels
+	),
+	data.frame(
+		method = "poisson_mut",
+		cd = cd.poisson.mut,
+		panel = panels
+	),
+	data.frame(
+		method = "poisson_mut_panelc",
+		cd = cd.poisson.mut.panelc,
+		panel = NA
+	),
+	data.frame(
+		method = "poisson_mut_l2",
+		cd = cd.poisson.mut.l2,
+		panel = panels
+	)
+);
+
+qdraw(
+	ggplot(d, aes(x=method, y=cd)) + theme_classic() +
+		geom_point(aes(shape=panel)) + coord_flip() +
+		stat_summary(colour="red") +
+		ylab("r^2") +
+		theme(legend.position="bottom"),
+	width = 6, height =4,
+	file = "tmb-calib_training_r2.pdf"
+)
 
 nrmse.linear <- unlist(lapply(fits.linear, function(fit) nrmse(tmb.exome, fitted(fit))));
 nrmse.poisson <- unlist(lapply(fits.poisson, function(fit) nrmse(tmb.exome, fitted(fit)/tm.exposure)));
@@ -338,6 +397,7 @@ qdraw(
 		geom_point(aes(shape=panel)) + coord_flip() +
 		stat_summary(colour="red") +
 		theme(legend.position="bottom"),
-	width = 6, height =4
+	width = 6, height =4,
+	file = "tmb-calib_training_nrmse.pdf"
 )
 
