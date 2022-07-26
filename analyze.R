@@ -29,7 +29,7 @@ nrmse <- function(x, y) {
 
 # --- Read input data
 
-pheno <- qread("data/GDC-PANCAN.project_info.tsv");
+pheno0 <- qread("data/GDC-PANCAN.project_info.tsv");
 
 counts.exome0 <- read.table("data/mut_count/Exome_nonsilent_mut.txt", sep="\t", row.names=1, header=FALSE);
 colnames(counts.exome0) <- counts.fields;
@@ -63,6 +63,7 @@ samples.panels <- Reduce(
 
 samples <- intersect(rownames(counts.exome0), samples.panels);
 
+pheno <- pheno0[match(samples, pheno0$sample), ];
 counts.exome <- counts.exome0[samples, ];
 counts.panels <- lapply(counts.panel0s,
 	function(counts.panel0) counts.panel0[samples, ]
@@ -241,8 +242,8 @@ predict_poisson <- function(model, tmb.panel) {
 		log_exposure = log(model$params$exposure),
 		log_x = log(tmb.panel)
 	);
-	# response is the count/exposure
-	predict(model$model, d, type="response")
+	# response is the count
+	predict(model$model, d, type="response") / model$params$exposure
 }
 
 # mutation type specific Poisson model
@@ -385,7 +386,7 @@ fitted.linear <- lapply(panels,
 );
 
 models.poisson <- lapply(panels,
-	function(panel) train_poisson(tmb.exome, opps.exome, tmb.panels[[panel]])
+	function(panel) train_poisson(tmc.exome, opps.exome, tmb.panels[[panel]])
 );
 fitted.poisson <- lapply(panels,
 	function(panel) predict_poisson(models.poisson[[panel]], tmb.panels[[panel]])
@@ -468,15 +469,56 @@ qdraw(
 
 # --- Evaluate cross-validation performance
 
+cv <- function(X, y, folds, train_f, predict_f) {
+	fs <- unique(folds);
+	yhat <- rep(NA, nrow(y));
+	for (f in fs) {
+			idx <- folds != f;
+			fit <- train_f(X[idx, ], y[idx, ]);
+			yhat[!idx] <- predict_f(fit, X[!idx, ])
+	}
+	yhat
+}
 
+#set.seed(1234);
+#k <- 5;
+#folds <- sample.int(k, size=nrow(pheno), replace=TRUE);
 
+folds <- pheno$disease_code.project;
+
+fitted.linear <- lapply(panels,
+	function(panel) {
+		cv(matrix(tmb.panels[[panel]], ncol=1), matrix(tmb.exome, ncol=1), folds,
+			function(X, y) train_linear(y, X),
+			function(fit, X.new) predict_linear(fit, X.new)
+		);
+	}
+);
+
+fitted.poisson <- lapply(panels,
+	function(panel) {
+		cv(matrix(tmb.panels[[panel]], ncol=1), matrix(tmc.exome, ncol=1), folds,
+			function(X, y) train_poisson(y, opps.exome, X),
+			function(fit, X.new) predict_poisson(fit, X.new)
+		)
+	}
+);
+
+fitted.poisson.smb.2l <- lapply(panels,
+	function(panel) {
+		cv(as.data.frame(rates.panels[[panel]]), counts.exome, folds,
+			function(X, y) train_poisson_smb_2l(y, exposures.exome, X),
+			function(fit, X.new) predict_poisson_smb_2l(fit, X.new)
+		)
+	}
+);
 
 # ---
 
 cd.none <- unlist(lapply(tmb.panels, function(yhat) cor(tmb.exome, yhat)^2));
 cd.linear <- unlist(lapply(fitted.linear, function(yhat) cor(tmb.exome, yhat)^2));
 cd.poisson <- unlist(lapply(fitted.poisson, function(yhat) cor(tmb.exome, yhat)^2));
-cd.poisson.smb <- unlist(lapply(fitted.poisson.smb, function(yhat) cor(tmb.exome, yhat)^2));
+#cd.poisson.smb <- unlist(lapply(fitted.poisson.smb, function(yhat) cor(tmb.exome, yhat)^2));
 cd.poisson.smb.2l <- unlist(lapply(fitted.poisson.smb.2l, function(yhat) cor(tmb.exome, yhat)^2));
 
 d.cd <- rbind(
@@ -523,15 +565,15 @@ qdraw(
 nrmse.none <- unlist(lapply(tmb.panels, function(yhat) nrmse(tmb.exome, yhat)));
 nrmse.linear <- unlist(lapply(fitted.linear, function(yhat) nrmse(tmb.exome, yhat)));
 nrmse.poisson <- unlist(lapply(fitted.poisson, function(yhat) nrmse(tmb.exome, yhat)));
-nrmse.poisson.smb <- unlist(lapply(fitted.poisson.smb, function(yhat) nrmse(tmb.exome, yhat)));
+#nrmse.poisson.smb <- unlist(lapply(fitted.poisson.smb, function(yhat) nrmse(tmb.exome, yhat)));
 nrmse.poisson.smb.2l <- unlist(lapply(fitted.poisson.smb.2l, function(yhat) nrmse(tmb.exome, yhat)));
 
 d.nrmse <- rbind(
-	data.frame(
-		method = "none",
-		nrmse = nrmse.none,
-		panel = panels
-	),
+	# data.frame(
+	# 	method = "none",
+	# 	nrmse = nrmse.none,
+	# 	panel = panels
+	# ),
 	data.frame(
 		method = "linear",
 		nrmse = nrmse.linear,
