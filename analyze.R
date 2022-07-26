@@ -559,7 +559,7 @@ qdraw(
 		theme(legend.position="bottom")
 	,
 	width = 6, height =4,
-	file = "tmb-calib_training_r2.pdf"
+	file = "tmb-calib_cv_r2.pdf"
 )
 
 nrmse.none <- unlist(lapply(tmb.panels, function(yhat) nrmse(tmb.exome, yhat)));
@@ -605,6 +605,6 @@ qdraw(
 		theme(legend.position="bottom")
 	,
 	width = 6, height =4,
-	file = "tmb-calib_training_nrmse.pdf"
+	file = "tmb-calib_cv_nrmse.pdf"
 )
 
