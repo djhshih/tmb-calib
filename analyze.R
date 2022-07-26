@@ -202,81 +202,63 @@ qdraw(
 
 # --- Models
 
-train_linear <- function(tmb.exome, tmb.panels) {
-	panels <- names(tmb.panels);
-	names(panels) <- panels;
-	fits.linear <- lapply(panels,
-		function(panel) {
-			d <- data.frame(
-				y = tmb.exome,
-				x = tmb.panels[[panel]]
-			);
-			# no y-intercept because it can result in negative TMB predictions
-			lm(y ~ x - 1, data=d);
-		}
+train_linear <- function(tmb.exome, tmb.panel) {
+	d <- data.frame(
+		y = tmb.exome,
+		x = tmb.panel
 	);
-	structure(list(models=fits.linear), class="tmb_calib_linear")
+	# no y-intercept because it can result in negative TMB predictions
+	fit <- lm(y ~ x - 1, data=d);
+	structure(list(model=fit), class="tmb_calib_linear")
 }
 
 # @param tmb.panel  TMB measured by a targeted panel
-predict_linear <- function(model, tmb.panel, panel) {
+predict_linear <- function(model, tmb.panel) {
 	d <- data.frame(
 		x = tmb.panel
 	);
-	predict(model$models[[panel]], d)
+	predict(model$model, d)
 }
 
-train_poisson <- function(tmc.exome, opps.exome, tmb.panels) {
-	panels <- names(tmb.panels);
-	names(panels) <- panels;
-
-	fits.poisson <- lapply(panels,
-		function(panel) {
-			d <- data.frame(
-				count = tmc.exome,
-				log_exposure = rep(log(sum(opps.exome)), length(tmc.exome)),
-				log_x = log(tmb.panels[[panel]])
-			);
-			glm(count ~ offset(log_exposure) + log_x, family="quasipoisson", data=d);
-		}
+train_poisson <- function(tmc.exome, opps.exome, tmb.panel) {
+	d <- data.frame(
+		count = tmc.exome,
+		log_exposure = log(sum(opps.exome)),
+		log_x = log(tmb.panel)
 	);
+	fit <- glm(count ~ offset(log_exposure) + log_x, family="quasipoisson", data=d);
 
 	params <- list(
 		exposure = sum(opps.exome)
 	);
 
-	structure(list(models=fits.poisson, params=params), class="tmb_calib_poisson")
+	structure(list(model=fit, params=params), class="tmb_calib_poisson")
 }
 
 # @param tmb.panel  TMB measured by a targeted panel
-predict_poisson <- function(model, tmb.panel, panel) {
+predict_poisson <- function(model, tmb.panel) {
 	d <- data.frame(
 		log_exposure = log(model$params$exposure),
 		log_x = log(tmb.panel)
 	);
 	# response is the count/exposure
-	predict(model$models[[panel]], d, type="response")
+	predict(model$model, d, type="response")
 }
 
 # mutation type specific Poisson model
-train_poisson_smb <- function(counts.exome, exposures.exome, rates.panels) {
-	panels <- names(rates.panels);
-	names(panels) <- panels;
-	mut.types <- names(rates.panels[[1]]);
+train_poisson_smb <- function(counts.exome, exposures.exome, rates.panel) {
+	mut.types <- names(rates.panel);
 	names(mut.types) <- mut.types;
 
-	fits <- lapply(panels,
-		function(panel) {
-			lapply(mut.types,
-				function(mut.type) {
-					d <- data.frame(
-						count = counts.exome[[mut.type]],
-						log_exposure = log(exposures.exome[[mut.type]]),
-						log_x = log(rates.panels[[panel]][[mut.type]])
-					);
-					glm(count ~ offset(log_exposure) + log_x, family="quasipoisson", data=d)
-				}
-			)
+	fits <- lapply(
+		mut.types,
+		function(mut.type) {
+			d <- data.frame(
+				count = counts.exome[[mut.type]],
+				log_exposure = log(exposures.exome[[mut.type]]),
+				log_x = log(rates.panel[[mut.type]])
+			);
+			glm(count ~ offset(log_exposure) + log_x, family="quasipoisson", data=d)
 		}
 	);
 
@@ -288,7 +270,7 @@ train_poisson_smb <- function(counts.exome, exposures.exome, rates.panels) {
 }
 
 # @param smb.panel  specific mutation burden measured by a targeted panel
-predict_poisson_smb <- function(model, smb.panel, panel) {
+predict_poisson_smb <- function(model, smb.panel) {
 	preds <- lapply(
 		names(smb.panel),
 		function(mut.type) {
@@ -297,7 +279,7 @@ predict_poisson_smb <- function(model, smb.panel, panel) {
 				log_x = log(smb.panel[[mut.type]])
 			);
 			# NB response is the count... why does predict not use offset?
-			predict(model$models[[panel]][[mut.type]], d, type="response")
+			predict(model$models[[mut.type]], d, type="response")
 		}
 	);
 
@@ -307,37 +289,30 @@ predict_poisson_smb <- function(model, smb.panel, panel) {
 
 
 # mutation type specific Poisson model
-train_poisson_smb_2l <- function(counts.exome, exposures.exome, rates.panels) {
-	fitss <- train_poisson_smb(counts.exome, exposures.exome, rates.panels)$models;
+train_poisson_smb_2l <- function(counts.exome, exposures.exome, rates.panel) {
+	fits <- train_poisson_smb(counts.exome, exposures.exome, rates.panel)$models;
 
-	panels <- names(rates.panels);
-	names(panels) <- panels;
+	fitteds <- lapply(fits, fitted);
+	tmc.exome <- rowSums(counts.exome);
 
-	ensembles <- lapply(panels,
-		function(panel) {
-			fitteds <- lapply(fitss[[panel]], fitted);
-
-			tmc.exome <- rowSums(counts.exome);
-
-			# Include intercept term to allow second layer to fix
-			# optimistic or pessimistic biases in rate estimates
-			ensemble <- glm(
-				tmc.exome ~ c_a + c_g + c_t + t_a + t_c + t_g + indel,
-				data = fitteds,
-				family="gaussian"
-			);
-		}
-	)
+	# include intercept term to allow second layer to fix
+	# optimistic or pessimistic biases in rate estimates
+	ensemble <- glm(
+		tmc.exome ~ c_a + c_g + c_t + t_a + t_c + t_g + indel,
+		data = fitteds,
+		family="gaussian"
+	);
 
 	params <- list(
 		exposure = exposures.exome
 	);
 
-	structure(list(models.l1=fitss, models.l2=ensembles, params=params), class="tmb_calib_poisson_smb_2l")
+	structure(list(models.l1=fits, model=ensemble, params=params),
+		class="tmb_calib_poisson_smb_2l")
 }
 
 # @param smb.panel  specific mutation burden measured by a targeted panel
-predict_poisson_smb_2l <- function(model, smb.panel, panel) {
+predict_poisson_smb_2l <- function(model, smb.panel) {
 	mut.types <- names(smb.panel);
 	names(mut.types) <- mut.types;
 
@@ -349,7 +324,7 @@ predict_poisson_smb_2l <- function(model, smb.panel, panel) {
 				log_x = log(smb.panel[[mut.type]])
 			);
 			# NB response is the count
-			predict(model$models.l1[[panel]][[mut.type]], d, type="response")
+			predict(model$models.l1[[mut.type]], d, type="response")
 		}
 	);
 	
@@ -357,7 +332,7 @@ predict_poisson_smb_2l <- function(model, smb.panel, panel) {
 	# total exposure is the number of nucleotides in the reference panel (i.e.
 	# exome), which is the same as the indel exposure
 	exposure <- model$params$exposure$indel;
-	pmax(0, predict(model$models.l2[[panel]], newdata=preds, type="response") / exposure)
+	pmax(0, predict(model$model, newdata=preds, type="response") / exposure)
 }
 
 # Obsolete models
@@ -402,24 +377,33 @@ fits.poisson.mut.cpanel <- lapply(mut.types,
 
 # --- Evaluate training performance
 
-model.linear <- train_linear(tmb.exome, tmb.panels);
+models.linear <- lapply(panels,
+	function(panel) train_linear(tmb.exome, tmb.panels[[panel]])
+);
 fitted.linear <- lapply(panels,
-	function(panel) predict_linear(model.linear, tmb.panels[[panel]], panel)
+	function(panel) predict_linear(models.linear[[panel]], tmb.panels[[panel]])
 );
 
-model.poisson <- train_poisson(tmb.exome, opps.exome, tmb.panels);
+models.poisson <- lapply(panels,
+	function(panel) train_poisson(tmb.exome, opps.exome, tmb.panels[[panel]])
+);
 fitted.poisson <- lapply(panels,
-	function(panel) predict_poisson(model.poisson, tmb.panels[[panel]], panel)
+	function(panel) predict_poisson(models.poisson[[panel]], tmb.panels[[panel]])
 );
 
-model.poisson.smb <- train_poisson_smb(counts.exome, exposures.exome, rates.panels);
+models.poisson.smb <- lapply(panels,
+	function(panel) train_poisson_smb(counts.exome, exposures.exome, rates.panels[[panel]])
+);
 fitted.poisson.smb <- lapply(panels,
-	function(panel) predict_poisson_smb(model.poisson.smb, rates.panels[[panel]], panel)
+	function(panel) predict_poisson_smb(models.poisson.smb[[panel]], rates.panels[[panel]])
 );
 
-model.poisson.smb.2l <- train_poisson_smb_2l(counts.exome, exposures.exome, rates.panels);
+models.poisson.smb.2l <- lapply(panels,
+	function(panel) train_poisson_smb_2l(counts.exome, exposures.exome, rates.panels[[panel]])
+);
 fitted.poisson.smb.2l <- lapply(panels,
-	function(panel) predict_poisson_smb_2l(model.poisson.smb.2l, rates.panels[[panel]], panel)
+	function(panel) predict_poisson_smb_2l(models.poisson.smb.2l[[panel]],
+		rates.panels[[panel]])
 );
 
 par(mfrow=c(3, 2));
@@ -471,7 +455,7 @@ qdraw(
 			for (mut.type in mut.types) {
 				smooth_scatter(
 					counts.exome[[mut.type]],
-					fitted(model.poisson.smb$models[[panel]][[mut.type]]),
+					fitted(models.poisson.smb[[panel]]$models[[mut.type]]),
 					main=paste(panel, mut.type)
 				)
 				abline(a=0, b=1, col="red")
@@ -481,6 +465,11 @@ qdraw(
 	width = 16, height = 16,
 	file = "tmb-calib_poisson-smb_smc.pdf"
 );
+
+# --- Evaluate cross-validation performance
+
+
+
 
 # ---
 
@@ -517,14 +506,16 @@ d.cd <- rbind(
 		panel = panels
 	)
 );
-d.cd$method <- factor(d.cd$method, levels=rev(unique(d.cd$method)));
+d.cd$method <- factor(d.cd$method, levels=unique(d.cd$method));
 
 qdraw(
 	ggplot(d.cd, aes(x=method, y=cd)) + theme_classic() +
-		geom_point(aes(shape=panel)) + coord_flip() +
+		geom_point(aes(shape=panel)) +
+		geom_line(aes(group=panel), alpha=0.2) +
 		stat_summary(colour="red") +
 		ylab("R^2") +
-		theme(legend.position="bottom"),
+		theme(legend.position="bottom")
+	,
 	width = 6, height =4,
 	file = "tmb-calib_training_r2.pdf"
 )
@@ -562,13 +553,15 @@ d.nrmse <- rbind(
 		panel = panels
 	)
 );
-d.nrmse$method <- factor(d.nrmse$method, levels=rev(unique(d.nrmse$method)));
+d.nrmse$method <- factor(d.nrmse$method, levels=unique(d.nrmse$method));
 
 qdraw(
 	ggplot(d.nrmse, aes(x=method, y=nrmse)) + theme_classic() +
-		geom_point(aes(shape=panel)) + coord_flip() +
+		geom_point(aes(shape=panel)) +
+		geom_line(aes(group=panel), alpha=0.2) +
 		stat_summary(colour="red") +
-		theme(legend.position="bottom"),
+		theme(legend.position="bottom")
+	,
 	width = 6, height =4,
 	file = "tmb-calib_training_nrmse.pdf"
 )
