@@ -569,11 +569,11 @@ nrmse.poisson <- unlist(lapply(fitted.poisson, function(yhat) nrmse(tmb.exome, y
 nrmse.poisson.smb.2l <- unlist(lapply(fitted.poisson.smb.2l, function(yhat) nrmse(tmb.exome, yhat)));
 
 d.nrmse <- rbind(
-	# data.frame(
-	# 	method = "none",
-	# 	nrmse = nrmse.none,
-	# 	panel = panels
-	# ),
+	data.frame(
+		method = "none",
+		nrmse = nrmse.none,
+		panel = panels
+	),
 	data.frame(
 		method = "linear",
 		nrmse = nrmse.linear,
