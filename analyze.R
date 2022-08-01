@@ -374,42 +374,40 @@ fits.poisson.mut.cpanel <- lapply(mut.types,
 	}
 );
 
-
-
 # --- Evaluate training performance
 
 models.linear <- lapply(panels,
 	function(panel) train_linear(tmb.exome, tmb.panels[[panel]])
 );
-fitted.linear <- lapply(panels,
+tr.fitted.linear <- lapply(panels,
 	function(panel) predict_linear(models.linear[[panel]], tmb.panels[[panel]])
 );
 
 models.poisson <- lapply(panels,
 	function(panel) train_poisson(tmc.exome, opps.exome, tmb.panels[[panel]])
 );
-fitted.poisson <- lapply(panels,
+tr.fitted.poisson <- lapply(panels,
 	function(panel) predict_poisson(models.poisson[[panel]], tmb.panels[[panel]])
 );
 
 models.poisson.smb <- lapply(panels,
 	function(panel) train_poisson_smb(counts.exome, exposures.exome, rates.panels[[panel]])
 );
-fitted.poisson.smb <- lapply(panels,
+tr.fitted.poisson.smb <- lapply(panels,
 	function(panel) predict_poisson_smb(models.poisson.smb[[panel]], rates.panels[[panel]])
 );
 
 models.poisson.smb.2l <- lapply(panels,
 	function(panel) train_poisson_smb_2l(counts.exome, exposures.exome, rates.panels[[panel]])
 );
-fitted.poisson.smb.2l <- lapply(panels,
+tr.fitted.poisson.smb.2l <- lapply(panels,
 	function(panel) predict_poisson_smb_2l(models.poisson.smb.2l[[panel]],
 		rates.panels[[panel]])
 );
 
 par(mfrow=c(3, 2));
 for (panel in panels) {
-	smooth_scatter(tmb.exome, fitted.linear[[panel]], main=panel,
+	smooth_scatter(tmb.exome, tr.fitted.linear[[panel]], main=panel,
 		xlim=c(0, 100)/1e6, ylim=c(0, 100)/1e6
 	)
 	abline(a=0, b=1, col="red")
@@ -417,7 +415,7 @@ for (panel in panels) {
 
 par(mfrow=c(3, 2));
 for (panel in panels) {
-	smooth_scatter(tmb.exome, fitted.poisson[[panel]], main=panel,
+	smooth_scatter(tmb.exome, tr.fitted.poisson[[panel]], main=panel,
 		xlim=c(0, 100)/1e6, ylim=c(0, 100)/1e6
 	)
 	abline(a=0, b=1, col="red")
@@ -425,7 +423,7 @@ for (panel in panels) {
 
 par(mfrow=c(3, 2));
 for (panel in panels) {
-	smooth_scatter(tmb.exome, fitted.poisson.smb[[panel]], main=panel,
+	smooth_scatter(tmb.exome, tr.fitted.poisson.smb[[panel]], main=panel,
 		xlim=c(0, 100)/1e6, ylim=c(0, 100)/1e6
 	)
 	abline(a=0, b=1, col="red")
@@ -433,7 +431,7 @@ for (panel in panels) {
 
 par(mfrow=c(3, 2));
 for (panel in panels) {
-	smooth_scatter(tmb.exome, fitted.poisson.smb.2l[[panel]], main=panel,
+	smooth_scatter(tmb.exome, tr.fitted.poisson.smb.2l[[panel]], main=panel,
 		xlim=c(0, 100)/1e6, ylim=c(0, 100)/1e6
 	)
 	abline(a=0, b=1, col="red")
@@ -441,11 +439,11 @@ for (panel in panels) {
 
 par(mfrow=c(3, 2));
 for (panel in panels) {
-	plot(tmb.exome, fitted.linear[[panel]], main=panel,
+	plot(tmb.exome, tr.fitted.linear[[panel]], main=panel,
 		xlim=c(0, 100/1e6), ylim=c(0, 100/1e6)
 	)
-	points(tmb.exome, fitted.poisson[[panel]], col="blue")
-	points(tmb.exome, fitted.poisson.smb.2l[[panel]], col="orange")
+	points(tmb.exome, tr.fitted.poisson[[panel]], col="blue")
+	points(tmb.exome, tr.fitted.poisson.smb.2l[[panel]], col="orange")
 	abline(a=0, b=1, col="red")
 }
 
@@ -467,9 +465,80 @@ qdraw(
 	file = "tmb-calib_poisson-smb_smc.pdf"
 );
 
+# @param yhatss  a list of list of fitted values
+# @param f   evaluation function
+evaluate_fits <- function(yhatss, f) {
+	d <- do.call(rbind, mapply(
+		function(yhats, method) {
+			do.call(rbind, mapply(
+				function(yhat, group) {
+					data.frame(
+						method = method,
+						score = f(yhat),
+						group = group
+					)
+				},
+				yhats, names(yhats),
+				SIMPLIFY = FALSE
+			))
+		},
+		yhatss, names(yhatss),
+		SIMPLIFY = FALSE
+	));
+	rownames(d) <- NULL;
+	d$method <- factor(d$method, levels=unique(d$method));
+	d$group <- factor(d$group, levels=unique(d$group));
+
+	d
+}
+
+# ---
+
+fitteds.tr <- list(
+	none = tmb.panels,
+	linear = tr.fitted.linear,
+	poisson = tr.fitted.poisson,
+	poisson_smb_2l = tr.fitted.poisson.smb.2l
+);
+
+d.tr.cd <- evaluate_fits(fitteds.tr, function(yhat) cor(tmb.exome, yhat)^2);
+
+qdraw(
+	ggplot(d.tr.cd, aes(x=method, y=score)) + theme_classic() +
+		geom_point(aes(shape=group)) +
+		geom_line(aes(group=group), alpha=0.2) +
+		stat_summary(colour="red") +
+		labs(shape="panel") +
+		ylab("R^2") +
+		theme(legend.position="bottom")
+	,
+	width = 6, height =4,
+	file = "tmb-calib_training_r2.pdf"
+)
+
+d.tr.nrmse <- evaluate_fits(fitteds.tr, function(yhat) nrmse(tmb.exome, yhat));
+
+qdraw(
+	ggplot(d.tr.nrmse, aes(x=method, y=score)) + theme_classic() +
+		geom_point(aes(shape=group)) +
+		geom_line(aes(group=group), alpha=0.2) +
+		stat_summary(colour="red") +
+		ylab("NRMSE") +
+		theme(legend.position="bottom")
+	,
+	width = 6, height =4,
+	file = "tmb-calib_training_nrmse.pdf"
+)
+
 # --- Evaluate cross-validation performance
 
 cv <- function(X, y, folds, train_f, predict_f) {
+	if (is.vector(X)) {
+		X <- matrix(X, ncol=1);
+	}
+	if (is.vector(y)) {
+		y <- matrix(y, ncol=1);
+	}
 	fs <- unique(folds);
 	yhat <- rep(NA, nrow(y));
 	for (f in fs) {
@@ -488,7 +557,7 @@ folds <- pheno$disease_code.project;
 
 fitted.linear <- lapply(panels,
 	function(panel) {
-		cv(matrix(tmb.panels[[panel]], ncol=1), matrix(tmb.exome, ncol=1), folds,
+		cv(tmb.panels[[panel]], tmb.exome, folds,
 			function(X, y) train_linear(y, X),
 			function(fit, X.new) predict_linear(fit, X.new)
 		);
@@ -497,7 +566,7 @@ fitted.linear <- lapply(panels,
 
 fitted.poisson <- lapply(panels,
 	function(panel) {
-		cv(matrix(tmb.panels[[panel]], ncol=1), matrix(tmc.exome, ncol=1), folds,
+		cv(tmb.panels[[panel]], tmc.exome, folds,
 			function(X, y) train_poisson(y, opps.exome, X),
 			function(fit, X.new) predict_poisson(fit, X.new)
 		)
@@ -515,46 +584,21 @@ fitted.poisson.smb.2l <- lapply(panels,
 
 # ---
 
-cd.none <- unlist(lapply(tmb.panels, function(yhat) cor(tmb.exome, yhat)^2));
-cd.linear <- unlist(lapply(fitted.linear, function(yhat) cor(tmb.exome, yhat)^2));
-cd.poisson <- unlist(lapply(fitted.poisson, function(yhat) cor(tmb.exome, yhat)^2));
-#cd.poisson.smb <- unlist(lapply(fitted.poisson.smb, function(yhat) cor(tmb.exome, yhat)^2));
-cd.poisson.smb.2l <- unlist(lapply(fitted.poisson.smb.2l, function(yhat) cor(tmb.exome, yhat)^2));
-
-d.cd <- rbind(
-	data.frame(
-		method = "none",
-		cd = cd.none,
-		panel = panels
-	),
-	data.frame(
-		method = "linear",
-		cd = cd.linear,
-		panel = panels
-	),
-	data.frame(
-		method = "poisson",
-		cd = cd.poisson,
-		panel = panels
-	),
-	# data.frame(
-	# 	method = "poisson_smb",
-	# 	cd = cd.poisson.smb,
-	# 	panel = panels
-	# ),
-	data.frame(
-		method = "poisson_smb_2l",
-		cd = cd.poisson.smb.2l,
-		panel = panels
-	)
+fitteds.cv <- list(
+	none = tmb.panels,
+	linear = fitted.linear,
+	poisson = fitted.poisson,
+	poisson_smb_2l = fitted.poisson.smb.2l
 );
-d.cd$method <- factor(d.cd$method, levels=unique(d.cd$method));
+
+d.cd <- evaluate_fits(fitteds.cv, function(yhat) cor(tmb.exome, yhat)^2);
 
 qdraw(
-	ggplot(d.cd, aes(x=method, y=cd)) + theme_classic() +
-		geom_point(aes(shape=panel)) +
-		geom_line(aes(group=panel), alpha=0.2) +
+	ggplot(d.cd, aes(x=method, y=score)) + theme_classic() +
+		geom_point(aes(shape=group)) +
+		geom_line(aes(group=group), alpha=0.2) +
 		stat_summary(colour="red") +
+		labs(shape="panel") +
 		ylab("R^2") +
 		theme(legend.position="bottom")
 	,
@@ -562,46 +606,14 @@ qdraw(
 	file = "tmb-calib_cv_r2.pdf"
 )
 
-nrmse.none <- unlist(lapply(tmb.panels, function(yhat) nrmse(tmb.exome, yhat)));
-nrmse.linear <- unlist(lapply(fitted.linear, function(yhat) nrmse(tmb.exome, yhat)));
-nrmse.poisson <- unlist(lapply(fitted.poisson, function(yhat) nrmse(tmb.exome, yhat)));
-#nrmse.poisson.smb <- unlist(lapply(fitted.poisson.smb, function(yhat) nrmse(tmb.exome, yhat)));
-nrmse.poisson.smb.2l <- unlist(lapply(fitted.poisson.smb.2l, function(yhat) nrmse(tmb.exome, yhat)));
-
-d.nrmse <- rbind(
-	data.frame(
-		method = "none",
-		nrmse = nrmse.none,
-		panel = panels
-	),
-	data.frame(
-		method = "linear",
-		nrmse = nrmse.linear,
-		panel = panels
-	),
-	data.frame(
-		method = "poisson",
-		nrmse = nrmse.poisson,
-		panel = panels
-	),
-	# data.frame(
-	# 	method = "poisson_smb",
-	# 	nrmse = nrmse.poisson.smb,
-	# 	panel = panels
-	# ),
-	data.frame(
-		method = "poisson_smb_2l",
-		nrmse = nrmse.poisson.smb.2l,
-		panel = panels
-	)
-);
-d.nrmse$method <- factor(d.nrmse$method, levels=unique(d.nrmse$method));
+d.nrmse <- evaluate_fits(fitteds.cv, function(yhat) nrmse(tmb.exome, yhat));
 
 qdraw(
-	ggplot(d.nrmse, aes(x=method, y=nrmse)) + theme_classic() +
-		geom_point(aes(shape=panel)) +
-		geom_line(aes(group=panel), alpha=0.2) +
+	ggplot(d.nrmse, aes(x=method, y=score)) + theme_classic() +
+		geom_point(aes(shape=group)) +
+		geom_line(aes(group=group), alpha=0.2) +
 		stat_summary(colour="red") +
+		ylab("NRMSE") +
 		theme(legend.position="bottom")
 	,
 	width = 6, height =4,
